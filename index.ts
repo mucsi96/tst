@@ -1,80 +1,91 @@
-import { build, transform } from "esbuild";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { Plugin, build } from "esbuild";
+import { promises } from "fs";
+import { omit } from "lodash";
+import { join } from "path";
+import { rimrafSync } from "rimraf";
 import {
-  SourceFile,
-  createCompilerHost,
   createProgram,
-  formatDiagnosticsWithColorAndContext,
+  flattenDiagnosticMessageText,
+  getLineAndCharacterOfPosition,
+  getPreEmitDiagnostics,
+  parseJsonConfigFileContent,
+  readConfigFile,
+  sys,
 } from "typescript";
 
-async function transpileWithESBuild(
-  inputFile: string,
-  outputFile: string
-): Promise<void> {
-  await build({
-    entryPoints: [inputFile],
-    outfile: outputFile,
-    bundle: false,
-    platform: "node",
-  });
-}
+const basePath = join(__dirname, "test-app");
+const outdir = join(__dirname, "dist");
 
-function emitTypeDefinitions(inputFile: string, outputFile: string): void {
-  const host = createCompilerHost({});
-  const program = createProgram([inputFile], {});
-  const emitResult = program.emit(undefined, undefined, undefined, undefined, {
-    before: [() => emitDeclaration],
+function emitTSDeclaration() {
+  const tsConfigPath = join(basePath, "tsconfig.json");
+  const tsConfig = readConfigFile(tsConfigPath, sys.readFile);
+  const { options, fileNames } = parseJsonConfigFileContent(
+    tsConfig.config,
+    sys,
+    basePath,
+    {
+      skipLibCheck: true,
+      declaration: true,
+      emitDeclarationOnly: true,
+      declarationDir: outdir,
+    },
+    tsConfigPath
+  );
+  const program = createProgram(fileNames, omit(options, ["noEmit"]));
+  const emitResult = program.emit();
+
+  const allDiagnostics = getPreEmitDiagnostics(program).concat(
+    emitResult.diagnostics
+  );
+
+  allDiagnostics.forEach((diagnostic) => {
+    if (diagnostic.file) {
+      const { line, character } = getLineAndCharacterOfPosition(
+        diagnostic.file,
+        diagnostic.start!
+      );
+      const message = flattenDiagnosticMessageText(
+        diagnostic.messageText,
+        "\n"
+      );
+      console.log(
+        `${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message}`
+      );
+    } else {
+      console.log(flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    }
   });
 
-  if (emitResult.diagnostics.length > 0) {
-    console.error(
-      formatDiagnosticsWithColorAndContext(emitResult.diagnostics, host)
-    );
+  if (allDiagnostics.length) {
+    process.exit(1);
   }
 }
 
-function emitDeclaration(file: SourceFile): SourceFile {
-  console.log(file.fileName, file.getFullText());
+rimrafSync(outdir);
 
-  return file;
-}
+const StyleLoader: Plugin = {
+  name: "inline-style",
+  setup({ onLoad }) {
+    const template = (css: string) =>
+      `typeof document<'u'&&` +
+      `document.head.appendChild(document.createElement('style'))` +
+      `.appendChild(document.createTextNode(${JSON.stringify(css)}))`;
+    onLoad({ filter: /\.css$/ }, async (args) => {
+      let css = await promises.readFile(args.path, "utf8");
+      return { contents: template(css) };
+    });
+  },
+};
 
-function processFiles(inputDir: string, outputDir: string): void {
-  readdirSync(inputDir).forEach((file) => {
-    const inputFile = join(inputDir, file);
-    const isDirectory = statSync(inputFile).isDirectory();
+build({
+  bundle: false,
+  minify: false,
+  entryPoints: [join(basePath, "src")],
+  outdir,
+  format: "esm",
+  sourcemap: false,
+  platform: "node",
+  plugins: [StyleLoader],
+}).catch(() => process.exit(1));
 
-    if (file === "node_modules" || inputFile === "public") {
-      return;
-    }
-
-    if (isDirectory) {
-      const nestedOutputDir = join(outputDir, file);
-      if (!existsSync(nestedOutputDir)) {
-        mkdirSync(nestedOutputDir);
-      }
-      processFiles(inputFile, nestedOutputDir);
-    } else if (
-      (file.endsWith(".ts") &&
-        !file.endsWith(".d.ts") &&
-        !file.endsWith(".test.ts")) ||
-      (file.endsWith(".tsx") && !file.endsWith(".test.tsx")) ||
-      file.endsWith(".css")
-    ) {
-      const outputFile = join(outputDir, file.replace(/\.tsx?$/, ".js"));
-      transpileWithESBuild(inputFile, outputFile).then(() => {
-        emitTypeDefinitions(inputFile, outputFile);
-      });
-    }
-  });
-}
-
-const inputDir = join(__dirname, "test-app");
-const outputDir = join(__dirname, "dist");
-
-if (!existsSync(outputDir)) {
-  mkdirSync(outputDir);
-}
-
-processFiles(inputDir, outputDir);
+emitTSDeclaration();

@@ -7,11 +7,16 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "ts-node index.ts"
+    "start": "ts-node index.ts",
+    "ts": "tsc --project test-app"
   },
   "dependencies": {
+    "@types/lodash": "^4.14.202",
     "@types/node": "^20.10.5",
     "esbuild": "^0.19.10",
+    "fast-glob": "^3.3.2",
+    "lodash": "^4.17.21",
+    "rimraf": "^5.0.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }
