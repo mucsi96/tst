@@ -3,6 +3,7 @@ import { promises } from "fs";
 import { omit } from "lodash";
 import { join } from "path";
 import { rimrafSync } from "rimraf";
+import svgr from "esbuild-plugin-svgr";
 import {
   createProgram,
   flattenDiagnosticMessageText,
@@ -77,15 +78,23 @@ const StyleLoader: Plugin = {
   },
 };
 
+const makeAllPackagesExternalPlugin: Plugin = {
+    name: 'make-all-packages-external',
+    setup(build) {
+      let filter = /^[^.\/]|^\.[^.\/]|^\.\.[^\/]/ // Must not start with "/" or "./" or "../"
+      build.onResolve({ filter }, args => ({ path: args.path, external: true }))
+    },
+  }
+
 build({
-  bundle: false,
+  bundle: true,
   minify: false,
   entryPoints: [join(basePath, "src")],
   outdir,
   format: "esm",
   sourcemap: false,
-  platform: "node",
-  plugins: [StyleLoader],
+  platform: "browser",
+  plugins: [makeAllPackagesExternalPlugin, StyleLoader, svgr()],
 }).catch(() => process.exit(1));
 
 emitTSDeclaration();
